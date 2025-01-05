@@ -1586,10 +1586,10 @@ class Saves(Qtw.QFrame):
             i = 0
             for row in range(rowCount):
                 for col in range(colCount):
-                    try:
-                        line = lines[i].strip()
-                    except:
-                        line = None
+                    
+
+                    line = lines[i].strip()  if i < len(lines) else None
+                  
                    
                     label = ClickableLabels(i, grid)
                     label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
@@ -1597,9 +1597,12 @@ class Saves(Qtw.QFrame):
                     label.setScaledContents(True)
 
 
-                    if line is not None:
+                    if line:
                         print(line + ">>line")
-                        res = requests.get(line, timeout=5)
+                        try:
+                            res = requests.get(line, timeout=5)
+                        except requests.exceptions.RequestException:
+                            pass
                         img = QtGui.QImage()
                         img.loadFromData(res.content)
                         pixmap = QtGui.QPixmap.fromImage(img).scaled(label.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
@@ -1730,15 +1733,14 @@ class Settings(Qtw.QDialog):
     def colorThemeChange(self):
         self.master.colorTheme = self.colorTheme.combo.currentText()
         new_options = []
-        for i in range(self.colorTheme.combo.count()):
-            new_options.append(self.colorTheme.combo.itemText(i))
+        for i in range(self.colorTheme.list_widg.count()):
+            new_options.append(self.colorTheme.list_widg.item(i).text())
         self.master.colorOptions = new_options
         self.setting_set()
         
     def backgroundColorChange(self):
         text = self.backGroundCustom.combo.currentText()
-        if text and len(text) > 1:
-            self.master.backgroundTheme = text
+        self.master.backgroundTheme = text
         
         self.setting_set()
 
@@ -1852,6 +1854,7 @@ class AddableCombo(Qtw.QWidget):
         self.combo = Qtw.QComboBox()
         self.combo.setDuplicatesEnabled(False)
         self.list_widg = Qtw.QListWidget()
+        self.list_widg.itemClicked.connect(self.updateCombo)
         self.combo.setModel(self.list_widg.model())
         self.combo.setView(self.list_widg)
 
@@ -1880,14 +1883,15 @@ class AddableCombo(Qtw.QWidget):
 
     def add_itm_wid(self, text):
         background_item = Qtw.QListWidgetItem()
+        background_item.setText(text)
         inner_background_widget = Qtw.QWidget()
         inner_background_item_layout = Qtw.QHBoxLayout()
         remove_icon = QtGui.QIcon("origin/assets/minus.png")
         remove_btn = Qtw.QPushButton(inner_background_widget)
         remove_btn.setIcon(remove_icon)
-        background_item_text = status_labels()
+        background_item_text = Qtw.QLabel()
         background_item_text.setText(text)
-        background_item_text.clicked.connect(lambda: self.combo.setCurrentText(background_item_text.text()))
+
         
         
         inner_background_item_layout.addWidget(background_item_text)
@@ -1897,26 +1901,23 @@ class AddableCombo(Qtw.QWidget):
 
         self.list_widg.addItem(background_item)
         self.list_widg.setItemWidget(background_item, inner_background_widget)
-        n = self.list_widg.count()-1
         
+        n = self.list_widg.count() - 1
         remove_btn.clicked.connect(partial(self.remove_itm_wid, n))
+        
+    def updateCombo(self, item):
+       
+        text = item.text()
+        self.combo.setCurrentText(text)
+        
         
     def remove_itm_wid(self, n):
         self.combo.removeItem(n)
+        self.combo.setCurrentText("")
+       
         self.REMOVE_SIGNAL.emit()
 
-class status_labels(Qtw.QLabel):
-    clicked = Qtc.pyqtSignal()
-    def __init__(self):
-        super().__init__()
-        self.installEventFilter(self)
 
-    def eventFilter(self, source, event):
-        if source == self:
-            if event.type() == Qtc.QEvent.Type.MouseButtonPress:
-                self.clicked.emit()
-                return True
-        return super().eventFilter(source, event)
     
 
 engine = QQmlApplicationEngine()
