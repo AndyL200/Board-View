@@ -450,8 +450,10 @@ class SearchPage(Qtw.QFrame):
             self.grid_scroll.hide()
 
     def switchBack(self):
+        self.blockSignals(True)
         self.loading.set(1)
         self.findingTags.set(1)
+        self.worker.stop = True
         self.t.quit()
         self.bottomNavThread.quit()
         self.t.wait()
@@ -814,7 +816,7 @@ class SearchPage(Qtw.QFrame):
         label.clicked.connect(self.imageViewer.initalizeView)
         
 
-        heart_icon = QtGui.QIcon('origin/loveheart_empty.png')
+        heart_icon = QtGui.QIcon('origin/assets/loveheart_empty.png')
         save_btn = ButtonWithState()
         save_btn.setIcon(heart_icon)
           
@@ -1159,16 +1161,18 @@ class SearchPage(Qtw.QFrame):
     def save_feature(self, json, btn):
         filepath = os.path.join('origin','saves.txt')
         if btn.state == 0:
+            try:
+                file_url = json['file_url']
+            except:
+                file_url = json['@file_url']
+
             icon = QtGui.QIcon('origin/assets/red-heart-icon.png')
             btn.setIcon(icon)
             btn.state = 1
+            alreadyThereFlag = False
             if os.path.exists(os.path.join(filepath)):
-                try:
-                    file_url = json['file_url']
-                except:
-                    file_url = json['@file_url']
+              
 
-                alreadyThereFlag = False
                 with open(filepath, 'r+') as file:
                     lines = file.readlines()
                     for line in lines:
@@ -1183,6 +1187,17 @@ class SearchPage(Qtw.QFrame):
                 with open(filepath, 'w') as file:
                     file.write(file_url + '\n')
 
+            
+            downloadsFilePath = os.path.join('origin', 'saveImg')
+            if not os.path.exists(downloadsFilePath):
+                os.mkdir(downloadsFilePath)
+           
+            if not alreadyThereFlag:
+                saved_img = os.path.join(downloadsFilePath, os.path.basename(file_url))
+                req = requests.get(file_url, stream=True, timeout=10)
+                with open(saved_img, 'wb') as file:
+                    file.write(req.content)
+            
         
         elif btn.state == 1 and os.path.exists(filepath):
             icon = QtGui.QIcon('origin/assets/loveheart_empty.png')
@@ -1201,6 +1216,8 @@ class SearchPage(Qtw.QFrame):
                 for line in lines:
                     if line.strip() != file_url:
                         file.write(line)
+            if os.path.exists(os.path.join('origin', 'saveImg', os.path.basename(file_url))):
+                os.remove(os.path.join('origin', 'saveImg', os.path.basename(file_url)))
             btn.state = 0
         print(os.path.exists(filepath))
         print(btn.icon())
@@ -1447,16 +1464,16 @@ class Worker(Qtc.QObject):
         L = self.scraper.site.imagePop()
 
         i = 0
-        for i in range(len(L)):
-            if self.stop:
-                # self.loading = False
-                return
-            try:
-                res = requests.get(L[i], timeout=2)
-                self.progress.emit(res.content, siteJson[i], self.isVideo(L[i]), self.isGif(L[i]))
+        with requests.Session() as session:
+            for i in range(len(L)):
+                if self.stop:
+                    break
+                try:
+                    res = session.get(L[i], timeout=15, stream=True)
+                    self.progress.emit(res.content, siteJson[i], self.isVideo(L[i]), self.isGif(L[i]))
 
-            except:
-                continue
+                except:
+                    continue
        
         self.finished.emit()
 
@@ -1545,23 +1562,17 @@ class Saves(Qtw.QFrame):
     def __init__(self, master):
         super().__init__()
         self.master = master
-        self.centralWidget = Qtw.QWidget(self)
-        savedGrid = Qtw.QGridLayout()
-        savedGrid.setContentsMargins(0,0,0,0)
-        savedGrid.itemAt(1)
+        naughtWidget = self.makeDefaultCentWidget()
+        self.centralWidgets = [naughtWidget]
+        
         colCount = 5
         rowCount = 5
 
-
         self.imageView = ImageViewer(self, self.master.originalSizedImages)
 
-        self.initializeGrid(savedGrid, colCount, rowCount)
-
-        self.centralWidget.setLayout(savedGrid)
-        self.centralWidget.setStyleSheet("""
-                                         padding:5px;
-
-""")
+        self.initializeGrid(naughtWidget.layout(), colCount, rowCount)
+       
+        
         bottomNav = Qtw.QWidget()
         back_btn = Qtw.QPushButton(text="Back")
         back_btn.clicked.connect(lambda: self.master.showFrame("StartPage"))
@@ -1570,7 +1581,7 @@ class Saves(Qtw.QFrame):
         bottomNav.setLayout(h_row)
 
         self.mainlayout = Qtw.QVBoxLayout()
-        self.mainlayout.addWidget(self.centralWidget)
+        self.mainlayout.addWidget(naughtWidget)
         self.mainlayout.addWidget(bottomNav)
         self.mainlayout.setStretch(0, 13)
         self.mainlayout.setStretch(1, 2)
@@ -1580,40 +1591,60 @@ class Saves(Qtw.QFrame):
         self.installEventFilter(self)
         
         self.setLayout(self.mainlayout)
-    def initializeGrid(self, grid, colCount, rowCount):
-        with open("origin/saves.txt", mode='r') as file:
-            lines = file.readlines()
-            i = 0
-            for row in range(rowCount):
-                for col in range(colCount):
-                    
+    def makeDefaultCentWidget(self):
+        c = Qtw.QWidget(self)
+        savedGrid = Qtw.QGridLayout()
+        savedGrid.setContentsMargins(0,0,0,0)
+        savedGrid.itemAt(1)
+        c.setLayout(savedGrid)
+        return c
+        
 
-                    line = lines[i].strip()  if i < len(lines) else None
-                  
+    def initializeGrid(self, grid, colCount, rowCount, page=0):
+        downloads_files_path = os.path.join('origin', 'saveImg')
+        downloads_directory = os.listdir(downloads_files_path)
+        maxCount = rowCount * colCount
+        row = 0
+        col = 0
+        i = page * maxCount
+        maxCount = i + maxCount
+        while i < len(downloads_directory):
+            if i == maxCount:
+                self.initializeGrid(self, grid, colCount, rowCount, page=1)
+                return
+            col+=1
                    
-                    label = ClickableLabels(i, grid)
-                    label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
-                    label.setMaximumSize(int(self.width()/5), int(self.height()/5))
-                    label.setScaledContents(True)
+            label = ClickableLabels(i, grid)
+            label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
+            label.setFixedSize(int(self.width()/5), int(self.height()/5))
+            label.setScaledContents(True)
+            
+            with open(os.path.join(downloads_files_path, downloads_directory[i]), 'rb') as file:
+                content = file.read()
+            img = QtGui.QImage()
+            img.loadFromData(content)
+            pixmap = QtGui.QPixmap.fromImage(img).scaled(img.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
+            label.setPixmap(pixmap)
+            grid.addWidget(label, row, col)
+            if col >= colCount:
+                col = 0
+                row += 1
+            i+=1
+        while i < maxCount:
+            col+=1
+            label = ClickableLabels(i, grid)
+            label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
+            label.setFixedSize(int(self.width()/5), int(self.height()/5))
+            label.setScaledContents(True)
 
-
-                    if line:
-                        print(line + ">>line")
-                        try:
-                            res = requests.get(line, timeout=5)
-                        except requests.exceptions.RequestException:
-                            pass
-                        img = QtGui.QImage()
-                        img.loadFromData(res.content)
-                        pixmap = QtGui.QPixmap.fromImage(img).scaled(label.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
-                        label.setPixmap(pixmap)
-                        grid.addWidget(label, row, col)
-                    else:
-                        img = QtGui.QImage("origin/assets/red-heart-icon.png")
-                        pixmap = QtGui.QPixmap.fromImage(img).scaled(label.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
-                        label.setPixmap(pixmap)
-                        grid.addWidget(label, row, col)
-                    i+=1
+            img = QtGui.QImage("origin/assets/red-heart-icon.png")
+            pixmap = QtGui.QPixmap.fromImage(img).scaled(img.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
+            label.setPixmap(pixmap)
+            grid.addWidget(label, row, col)
+            if col >= colCount:
+                col = 0
+                row += 1
+            i+=1
 
     def copyImg(self, current_img):
         new_img = Qtw.QLabel()
@@ -1623,6 +1654,9 @@ class Saves(Qtw.QFrame):
     def resizeEvent(self, event):
         self.imageView.resizeEvent(event)
         return super().resizeEvent(event)
+    
+
+
 class Settings(Qtw.QDialog):
     def __init__(self, master):
         super().__init__(master)    
