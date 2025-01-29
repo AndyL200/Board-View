@@ -4,7 +4,7 @@ import PyQt6.QtCore as Qtc
 import PyQt6.QtMultimedia as Qtmedia
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtQml import QQmlApplicationEngine
-from scrape import Scraper
+from scrape import Scraper, Booru, Penscrape, GoogleImagesApi
 
 import json
 import os
@@ -144,10 +144,10 @@ class MainWindow(Qtw.QMainWindow):
             frame = StartPage(self)
            
         elif page_name == "SearchPage":
-            frame = SearchPage(self)
+            frame = SearchPage(self, whatToShow)
             frame.whatToPull(whatToShow)
         elif page_name == "TopPage":
-            frame = TopPage(self)
+            frame = TopPage(self, whatToShow)
             frame.whatToPull(whatToShow)
         elif page_name == "Saves":
             frame = Saves(self)
@@ -237,8 +237,7 @@ class monolistChange(Qtc.QEvent):
 
 class SearchPage(Qtw.QFrame):
     comp = ""
-    scraper = None
-    def __init__(self, master):
+    def __init__(self, master, url):
         super().__init__()
         self.setSizePolicy(Qtw.QSizePolicy.Policy.Expanding, Qtw.QSizePolicy.Policy.Expanding)
         
@@ -247,6 +246,7 @@ class SearchPage(Qtw.QFrame):
 
 
         self.master = master
+        self.scraper = Scraper(url)
         self.vidInt = AtomicInteger()
         
                                                                                                                         #atomic integer for image loading
@@ -353,12 +353,19 @@ class SearchPage(Qtw.QFrame):
         mod_plus_enter = Qtw.QHBoxLayout()
 
         ratingCombo = Qtw.QComboBox()
-        ratingCombo.setPlaceholderText("rating")
-        ratingCombo.addItems(["rating", "rating:general", "rating:safe","rating:explicit", "rating:questionable"])
         scoreCombo = Qtw.QComboBox()
-        scoreCombo.setPlaceholderText("score")
-        scoreCombo.addItems(["score", "score:>=50", "score:>=100", "score:>=250", "score:>=500", "score:>=1000"])
 
+        if isinstance(self.scraper.site, Booru):
+            ratingCombo.setPlaceholderText("rating")
+            ratingCombo.addItems(["rating", "rating:general", "rating:safe","rating:explicit", "rating:questionable"])
+            scoreCombo.setPlaceholderText("score")
+            scoreCombo.addItems(["score", "score:>=50", "score:>=100", "score:>=250", "score:>=500", "score:>=1000"])
+        elif isinstance(self.scraper.site, Penscrape):
+            ratingCombo.setPlaceholderText("Volume")
+            ratingCombo.addItems(['25', '50', '75', '100'])
+            scoreCombo.setPlaceholderText("Videos")
+            scoreCombo.addItems(["Yes", "No"])
+        
         tag_btn = Qtw.QPushButton(text="Enter")
         if self.master.tool_tips:
             tag_btn.setToolTip("Search on input tags or other restrictions")
@@ -656,7 +663,7 @@ class SearchPage(Qtw.QFrame):
     
     def checkScroll(self):
         scroll_bar = self.scr.verticalScrollBar()
-        if scroll_bar.value() > scroll_bar.maximum() * 0.99 and not self.t.isRunning():
+        if scroll_bar.value() > scroll_bar.maximum() * 0.95 and not self.t.isRunning():
             with self.scraper.lock:
                 self.scraper.site.pid+=1                                                                                                                     #scraper pid
                 self.loadThread()
@@ -700,11 +707,7 @@ class SearchPage(Qtw.QFrame):
 
         return super().eventFilter(source, event)
     def imageCombos(self, posts):
-        keys = list(posts.keys())
-        for att in keys:
-            if '@' in att:
-                new_att = att.strip('@')
-                posts[new_att] = posts.pop(att)
+        
         comboBox = Qtw.QComboBox()   
         comboBox.setInsertPolicy(Qtw.QComboBox.InsertPolicy.NoInsert)
         listWidget = Qtw.QListWidget()
@@ -796,9 +799,8 @@ class SearchPage(Qtw.QFrame):
             self.t.started.connect(self.worker.run)
             self.t.start()
 
-    @Qtc.pyqtSlot(bytes, dict, bool, bool, name="imageLoad")
+    @Qtc.pyqtSlot(bytes, dict, list, bool, name="imageLoad")
     def addImageToLayout(self, data, json, vidFlag, gifFlag):
-        # self.json = json
         
         widget = Qtw.QWidget()
         widget.setFixedWidth(int(self.master.width()*0.7))
@@ -862,11 +864,30 @@ class SearchPage(Qtw.QFrame):
             combos_saves_horizontal.setStretch(2, 2)
             inner_card_layout.addLayout(combos_saves_horizontal)
 
-        elif vidFlag:
+        elif vidFlag[0]:
 
             container = videoContainer(json)
             simpleLayout = Qtw.QVBoxLayout()
-            video = QVideoWidget()
+            is_stacked = False
+            if vidFlag[1]:
+                stacked = Qtw.QStackedLayout()
+                preview_image = QtGui.QImage()
+                preview_image.loadFromData(vidFlag[1])
+                preview_pixmap = QtGui.QPixmap.fromImage(preview_image)
+                preview_pixmap_scaled = preview_pixmap.scaled(preview_image.width(), preview_image.height(), aspectRatioMode=Qtc.Qt.AspectRatioMode.KeepAspectRatio, transformMode=Qtc.Qt.TransformationMode.SmoothTransformation)
+                preview_label = Qtw.QLabel()
+                preview_label.setScaledContents(True)
+                preview_label.setPixmap(preview_pixmap_scaled)
+                video = QVideoWidget()
+                stacked.addWidget(preview_label)
+                stacked.addWidget(video)
+                video.setContentsMargins(0,0,0,0)
+                preview_label.setContentsMargins(0,0,0,0)
+                stacked.setContentsMargins(0,0,0,0)
+                is_stacked = True
+            else:
+                video = QVideoWidget()
+
             audio = Qtmedia.QAudioOutput()
             audio.setVolume(0.5)
             audioDevice = Qtmedia.QMediaDevices.defaultAudioOutput()
@@ -894,12 +915,17 @@ class SearchPage(Qtw.QFrame):
             # video.videoFrameChanged.connect(lambda: self.handle_video(video.videoFrame(), label))
             player.setVideoOutput(video)
             player.setAudioOutput(audio)
+            player.setPlaybackRate(1.0)
 
             play_icon = QtGui.QIcon.fromTheme(QtGui.QIcon.ThemeIcon.MediaPlaybackStart)
             play_btn = Qtw.QPushButton(icon=play_icon)
             if self.master.tool_tips:
                 play_btn.setToolTip("Play video")
-            play_btn.clicked.connect(partial(self.handle_video, player, play_btn, json))
+            if is_stacked:
+                play_btn.clicked.connect(partial(self.handle_video_stack, player, play_btn, json, stacked))
+            else:
+                play_btn.clicked.connect(partial(self.handle_video, player, play_btn, json))
+
 
             
             video_slider.valueChanged.connect(lambda value: player.setPosition(int(player.duration()*value/100)))
@@ -925,12 +951,15 @@ class SearchPage(Qtw.QFrame):
             player.positionChanged.connect(partial(self.videoTimerStart, video_slider, player))
             
             
+            
            
             
             
             
-
-            simpleLayout.addWidget(video)
+            if is_stacked:
+                simpleLayout.addLayout(stacked)
+            else:
+                simpleLayout.addWidget(video)
             simpleLayout.addLayout(h_box)
             simpleLayout.setStretch(0,10)
             simpleLayout.setStretch(1,2)
@@ -944,7 +973,7 @@ class SearchPage(Qtw.QFrame):
             img = QtGui.QImage()
             img.loadFromData(data)
             pixmap = QtGui.QPixmap.fromImage(img)
-            scaled_pixmap = pixmap.scaled(widget.width(), widget.height(), aspectRatioMode=Qtc.Qt.AspectRatioMode.KeepAspectRatio, transformMode=Qtc.Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaled(img.width(), img.height(), aspectRatioMode=Qtc.Qt.AspectRatioMode.KeepAspectRatio, transformMode=Qtc.Qt.TransformationMode.SmoothTransformation)
             label.setPixmap(scaled_pixmap)
             inner_card_layout.addWidget(label)
 
@@ -1091,6 +1120,10 @@ class SearchPage(Qtw.QFrame):
     def videoTimerStart(self, slider, player):
         
         if isinstance(slider, Qtw.QSlider) and player:
+            if player.position() >= player.duration():
+                    player.setPosition(0)
+                    slider.setValue(0)
+                    player.play()
             try:
                 slider.blockSignals(True)
                 if player.duration() > 0:
@@ -1098,6 +1131,7 @@ class SearchPage(Qtw.QFrame):
                     if sliderValue > slider.value():
                         slider.setValue(sliderValue)
                 slider.blockSignals(False)
+                
             except:
                 return
         
@@ -1126,25 +1160,25 @@ class SearchPage(Qtw.QFrame):
             item = self.vbox.itemAt(i).widget()
             if not item.size() == Qtc.QSize(int(self.master.width()*0.7), int(self.master.height()*0.9)):
                 item.setFixedSize(int(self.master.width()*0.7), int(self.master.height()*0.9))
-    def handle_video(self, player, btn, json):
-        
+    def handle_video_stack(self, player, btn, json, stack):
         if not player.source().isValid() or player.source().isEmpty():
             try:
                 file_url = json['file_url']
             except:
-                file_url = json['@file_url']
-            os.makedirs('video_assets', exist_ok=True)
-            if not os.path.exists('video_assets' + file_url):
-                filename = os.path.join('video_assets', os.path.basename(file_url))
-                res = requests.get(file_url)
+                return
+            # os.makedirs('video_assets', exist_ok=True)
+            # if not os.path.exists('video_assets' + file_url):
+                # filename = os.path.join('video_assets', os.path.basename(file_url))
+                # res = requests.get(file_url, stream=True, timeout=10)
 
-                with open(filename, 'wb') as file:
-                    file.write(res.content)
-
-                player.setSource(Qtc.QUrl.fromLocalFile(filename))
-            else:
-                filename = 'video_assets/' + file_url
-                player.setSource(Qtc.QUrl.fromLocalFile(filename))
+                # with open(filename, 'wb') as file:
+                #     file.write(res.content)
+                
+            player.setSource(Qtc.QUrl(file_url))
+            stack.setCurrentWidget(player.videoOutput())
+            
+                # filename = os.path.join('video_assets', file_url)
+                # player.setSource(Qtc.QUrl.fromLocalFile(filename))
 
             player.play()
         else:
@@ -1158,13 +1192,56 @@ class SearchPage(Qtw.QFrame):
                 icon = QtGui.QIcon.fromTheme(QtGui.QIcon.ThemeIcon.MediaPlaybackStart)
                 btn.setIcon(icon)
                 player.play()
-    def save_feature(self, json, btn):
-        filepath = os.path.join('origin','saves.txt')
-        if btn.state == 0:
+    def handle_video(self, player, btn, json):
+        
+        if not player.source().isValid() or player.source().isEmpty():
             try:
                 file_url = json['file_url']
             except:
-                file_url = json['@file_url']
+                return
+            # os.makedirs('video_assets', exist_ok=True)
+            # if not os.path.exists('video_assets' + file_url):
+                # filename = os.path.join('video_assets', os.path.basename(file_url))
+                # res = requests.get(file_url, stream=True, timeout=10)
+
+                # with open(filename, 'wb') as file:
+                #     file.write(res.content)
+            F = Qtc.QUrl(file_url)
+            player.setSource(F)
+            
+                # filename = os.path.join('video_assets', file_url)
+                # player.setSource(Qtc.QUrl.fromLocalFile(filename))
+
+            player.play()
+        else:
+            
+            state = player.playbackState()
+            if  state == Qtmedia.QMediaPlayer.PlaybackState.PlayingState:
+                icon = QtGui.QIcon.fromTheme(QtGui.QIcon.ThemeIcon.MediaPlaybackPause)
+                btn.setIcon(icon)
+                player.pause()
+            else:
+                icon = QtGui.QIcon.fromTheme(QtGui.QIcon.ThemeIcon.MediaPlaybackStart)
+                btn.setIcon(icon)
+                player.play()
+    #AHHHHHHH SHOULD BE A IMAGE DOWNLOAD
+    def save_feature(self, json, btn):
+        
+        def nested_search(DIC, target):
+            for key, value in DIC.items():
+                if key == target:
+                    return value
+                elif isinstance(value, dict):
+                    found = nested_search(value, target)
+                    if found:
+                        return found
+            return None
+        filepath = os.path.join('origin','saves.txt')
+        if btn.state == 0:
+            file_url = nested_search(json, 'file_url')
+            print(file_url)
+            if not file_url:
+                return
 
             icon = QtGui.QIcon('origin/assets/red-heart-icon.png')
             btn.setIcon(icon)
@@ -1206,7 +1283,7 @@ class SearchPage(Qtw.QFrame):
             try:
                     file_url = json['file_url']
             except:
-                    file_url = json['@file_url']
+                    return
 
 
             with open(filepath, 'r') as file:
@@ -1425,7 +1502,7 @@ class GifWorker(Qtc.QObject):
             file_url = self.json['@file_url']
         if not os.path.exists(os.path.join('video_assets', os.path.basename(file_url))):
             filename = os.path.join('video_assets', os.path.basename(file_url))
-            res = requests.get(file_url)
+            res = requests.get(file_url, stream=True, timeout=10)
 
             with open(filename, 'wb') as file:
                 file.write(res.content)
@@ -1447,7 +1524,7 @@ class VidWorker(Qtc.QThread):
 
 
 class Worker(Qtc.QObject):
-    progress = Qtc.pyqtSignal(bytes, dict, bool, bool, name="imageLoad")
+    progress = Qtc.pyqtSignal(bytes, dict, list, bool, name="imageLoad")
     finished = Qtc.pyqtSignal(name="imageLoad")
 
     def __init__(self, url, scraper):
@@ -1461,29 +1538,51 @@ class Worker(Qtc.QObject):
 
         
         siteJson = self.scraper.site.retJson()
-        L = self.scraper.site.imagePop()
+        if siteJson:
+            L = self.scraper.site.imagePop2(siteJson)
+        else:
+            L = self.scraper.site.imagePop()
 
         i = 0
         with requests.Session() as session:
-            for i in range(len(L)):
-                if self.stop:
-                    break
-                try:
-                    res = session.get(L[i], timeout=15, stream=True)
-                    self.progress.emit(res.content, siteJson[i], self.isVideo(L[i]), self.isGif(L[i]))
+            if siteJson:
+                for i in range(len(L)):
+                    if self.stop:
+                        break
+                    try:
+                        res = session.get(L[i], stream=True)
+                        self.progress.emit(res.content, siteJson[i], self.isVideo(L[i], siteJson[i], session), self.isGif(L[i]))
 
-                except:
-                    continue
-       
+                    except Exception as e:
+                        print(e)
+                        continue
+            else:
+                for i in range(len(L)):
+                    if self.stop:
+                        break
+                    try:
+                        res = session.get(L[i], stream=True)
+                        self.progress.emit(res.content, {}, self.isVideo(L[i], {}, session), self.isGif(L[i]))
+
+                    except Exception as e:
+                        print(e)
+                        continue
         self.finished.emit()
 
-    def isVideo(self, url):
+    def isVideo(self, url, json, session):
         url = url.lower()
+        isVideo = False
         video_extensions =['.mp4', '.avi', '.mov', '.mkv']
         for v in video_extensions:
             if url.endswith(v):
-                return True
-        return False
+                isVideo = True
+        preview = None
+        if isVideo:
+            if 'preview_url' in json.keys():
+                video_preview = session.get(json['preview_url'], stream=True)
+                preview = video_preview.content
+
+        return [isVideo, preview]
     def isGif(self, url):    
         url = url.lower()
         if url.endswith('.gif'):
@@ -1547,8 +1646,8 @@ class ClickableLabels(Qtw.QLabel):
 
     
 class TopPage(SearchPage):
-    def __init__(self, master):
-        super().__init__(master)
+    def __init__(self, master, url):
+        super().__init__(master, url)
 
     def whatToPull(self, url):
         self.comp = url
@@ -1559,10 +1658,14 @@ class TopPage(SearchPage):
             self.loadThread()
 
 class Saves(Qtw.QFrame):
+    page = 0
     def __init__(self, master):
         super().__init__()
         self.master = master
+        self.setSizePolicy(Qtw.QSizePolicy.Policy.Expanding, Qtw.QSizePolicy.Policy.Expanding)
+        self.setBaseSize(self.master.width(), self.master.height())
         naughtWidget = self.makeDefaultCentWidget()
+        self.current = naughtWidget
         self.centralWidgets = [naughtWidget]
         
         colCount = 5
@@ -1570,35 +1673,93 @@ class Saves(Qtw.QFrame):
 
         self.imageView = ImageViewer(self, self.master.originalSizedImages)
 
-        self.initializeGrid(naughtWidget.layout(), colCount, rowCount)
        
+        pagination = Qtw.QWidget()
+        pagination_botm = Qtw.QHBoxLayout()
+        i = self.page
+        k = len(self.centralWidgets)
+        while i < self.page+2:
+            pagination_btn_left = Qtw.QPushButton(text=str(i))
+            pagination_btn_left.clicked.connect(lambda: self.changePage(i, colCount, rowCount))
+            pagination_botm.addWidget(pagination_btn_left)
+            i+=1
+        space = Qtw.QSpacerItem(int(self.width()*0.5), 2, Qtw.QSizePolicy.Policy.Expanding)
+        pagination_botm.addSpacerItem(space)
+        for j in range(k-2, k):
+            if j > 1:
+                pagination_btn_right = Qtw.QPushButton(text=str(j))
+                pagination_btn_right.clicked.connect(lambda: self.changePage(j, colCount, rowCount))
+                pagination_botm.addWidget(pagination_btn_right)
+        pagination.setLayout(pagination_botm)
+        pagination.setContentsMargins(0,0,0,0)
+        pagination.setSizePolicy(Qtw.QSizePolicy.Policy.Expanding, Qtw.QSizePolicy.Policy.Fixed)
         
-        bottomNav = Qtw.QWidget()
+        
+        bottom_back = Qtw.QWidget()
         back_btn = Qtw.QPushButton(text="Back")
         back_btn.clicked.connect(lambda: self.master.showFrame("StartPage"))
         h_row = Qtw.QHBoxLayout()
         h_row.addWidget(back_btn)
-        bottomNav.setLayout(h_row)
+        bottom_back.setLayout(h_row)
+        bottom_back.setContentsMargins(0,0,0,0)
+        bottom_back.setSizePolicy(Qtw.QSizePolicy.Policy.Expanding, Qtw.QSizePolicy.Policy.Fixed)
+     
 
         self.mainlayout = Qtw.QVBoxLayout()
-        self.mainlayout.addWidget(naughtWidget)
-        self.mainlayout.addWidget(bottomNav)
-        self.mainlayout.setStretch(0, 13)
-        self.mainlayout.setStretch(1, 2)
+        self.mainlayout.setSpacing(0)
+        self.mainlayout.setContentsMargins(0,0,0,0)
+        self.mainlayout.addWidget(naughtWidget, alignment=Qtc.Qt.AlignmentFlag.AlignCenter)
+        self.mainlayout.addWidget(pagination, alignment=Qtc.Qt.AlignmentFlag.AlignBottom)
+        self.mainlayout.addWidget(bottom_back, alignment=Qtc.Qt.AlignmentFlag.AlignBottom)
+        self.mainlayout.setStretch(0,15)
+        self.mainlayout.setStretch(1,1)
+        self.mainlayout.setStretch(2,1)
+
         self.setLayout(self.mainlayout)
+        self.initializeGrid(naughtWidget.layout(), colCount, rowCount)
+
         # self.setFixedWidth(self.master.width())
         # self.setFixedHeight(self.master.height())
         self.installEventFilter(self)
         
-        self.setLayout(self.mainlayout)
     def makeDefaultCentWidget(self):
-        c = Qtw.QWidget(self)
+        c = indexedWidgets(self.page)
         savedGrid = Qtw.QGridLayout()
-        savedGrid.setContentsMargins(0,0,0,0)
-        savedGrid.itemAt(1)
+        c.setFixedSize(int(self.width()), int(self.height()*0.7))
+        if '#' in self.master.backgroundTheme:
+            color = QtGui.QColor(self.master.backgroundTheme)
+            r = color.red()
+            g = color.green() + 20
+            b = color.blue()
+            r = min(255, r)
+            g = min(255, g)
+            b = min(255, b)
+            shift = QtGui.QColor(r,g,b).name()
+            c.setStyleSheet("background-color:" + shift)
+        elif not self.master.backgroundTheme:
+            c.setStyleSheet("background-color:#27282b")
+
+        c.setSizePolicy(Qtw.QSizePolicy.Policy.Expanding,Qtw.QSizePolicy.Policy.Expanding)
         c.setLayout(savedGrid)
         return c
+    def changePage(self, page, col, row):
+        for i in self.centralWidgets:
+            if i.index == page:
+                self.mainlayout.itemAt(0).widget().hide()
+                self.mainlayout.replaceWidget(self.mainlayout.itemAt(0).widget(), i)
+                self.current = i
+                self.mainlayout.update()
+                self.page = page
+                return
+            
+        self.page = page
+        newCenter = self.makeDefaultCentWidget()
+        self.centralWidgets.append(newCenter)
+        self.mainlayout.itemAt(0).widget().hide()
+        self.mainlayout.replaceWidget(self.mainlayout.itemAt(0).widget(), newCenter)
+        self.mainlayout.update()
         
+        self.initializeGrid(self.centralWidgets[-1].layout(), col, row, page)
 
     def initializeGrid(self, grid, colCount, rowCount, page=0):
         downloads_files_path = os.path.join('origin', 'saveImg')
@@ -1610,13 +1771,19 @@ class Saves(Qtw.QFrame):
         maxCount = i + maxCount
         while i < len(downloads_directory):
             if i == maxCount:
-                self.initializeGrid(self, grid, colCount, rowCount, page=1)
+                if page >= len(self.centralWidgets):
+                    self.page = page
+                    newCenter = self.makeDefaultCentWidget()
+                    self.centralWidgets.append(newCenter)
+                    self.mainlayout.replaceWidget(self.mainlayout.itemAt(0).widget(), newCenter)
+                    self.mainlayout.update()
+                self.initializeGrid(self, self.centralWidgets[-1].layout(), colCount, rowCount, self.page)
                 return
-            col+=1
+           
                    
-            label = ClickableLabels(i, grid)
+            label = ClickableLabels(i % maxCount, grid)
             label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
-            label.setFixedSize(int(self.width()/5), int(self.height()/5))
+            # label.setFixedSize(int(self.width()/10), int(self.height()/10))
             label.setScaledContents(True)
             
             with open(os.path.join(downloads_files_path, downloads_directory[i]), 'rb') as file:
@@ -1626,21 +1793,23 @@ class Saves(Qtw.QFrame):
             pixmap = QtGui.QPixmap.fromImage(img).scaled(img.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
             label.setPixmap(pixmap)
             grid.addWidget(label, row, col)
+            col+=1
             if col >= colCount:
                 col = 0
                 row += 1
             i+=1
         while i < maxCount:
-            col+=1
-            label = ClickableLabels(i, grid)
-            label.clicked.connect(partial(self.imageView.initalizeView, grid, i))                        
-            label.setFixedSize(int(self.width()/5), int(self.height()/5))
+            
+            label = ClickableLabels(i % maxCount, grid)
+            label.clicked.connect(partial(self.imageView.initalizeView, grid, i % maxCount))                        
+            # label.setFixedSize(int(self.width()/10), int(self.height()/10))
             label.setScaledContents(True)
 
             img = QtGui.QImage("origin/assets/red-heart-icon.png")
             pixmap = QtGui.QPixmap.fromImage(img).scaled(img.size(), Qtc.Qt.AspectRatioMode.KeepAspectRatio, Qtc.Qt.TransformationMode.SmoothTransformation)
             label.setPixmap(pixmap)
             grid.addWidget(label, row, col)
+            col+=1
             if col >= colCount:
                 col = 0
                 row += 1
@@ -1651,11 +1820,36 @@ class Saves(Qtw.QFrame):
         new_img.setScaledContents(True)
         new_img.setPixmap(current_img.pixmap())
         return new_img
+    # def copyVideo():
+
+    # def copyGif():
+    def eventFilter(self, event, source):
+        return super().eventFilter(event, source)
     def resizeEvent(self, event):
         self.imageView.resizeEvent(event)
-        return super().resizeEvent(event)
+        aspect = self.centralWidgets[self.current.index].width() / self.centralWidgets[self.current.index].height()
+        new_width = event.size().width()
+        new_height = event.size().height()
+        if new_width/aspect <= new_height:
+            new_height = new_width/aspect
+        else:
+            new_width = new_height * aspect
+        
+        self.centralWidgets[self.current.index].setMaximumSize(int(new_width), int(new_height))
+        super().resizeEvent(event)
+        # for i in range(self.mainlayout.count()):
+        #     if i == 0:
+        #         w = self.mainlayout.itemAt(i).widget()
+        #         w.setFixedSize(self.width(), int(self.height()*0.7)) 
+        #     else:
+        #         w = self.mainlayout.itemAt(i).widget()
+        #         w.setFixedSize(self.width(), int(self.height()*0.15))
+        
     
-
+class indexedWidgets(Qtw.QWidget):
+    def __init__(self, index, master=None):
+        super().__init__(master)
+        self.index = index
 
 class Settings(Qtw.QDialog):
     def __init__(self, master):
