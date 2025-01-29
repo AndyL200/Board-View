@@ -3,5 +3,8 @@ A Multithreaded PyQt application I made because I wanted to get better at art. I
 
 
 
-https://github.com/user-attachments/assets/52dcfc68-91e3-4aa7-9fda-d92dcda08134
+
+
+
+https://github.com/user-attachments/assets/9fa7dddf-92c6-477a-9a3f-f3ac51172ae2
 
